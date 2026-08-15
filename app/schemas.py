@@ -175,3 +175,18 @@ class NotificationOut(BaseModel):
     kind: Literal["season_released", "season_announced"]
     message: str
     season_number: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Browse (popular titles + search, for bulk "mark what I've already watched")
+# ---------------------------------------------------------------------------
+
+class BrowseResultOut(BaseModel):
+    tmdb_id: int
+    title: str
+    media_type: MediaType
+    year: int | None = None
+    poster_path: str | None = None
+    imdb_rating: float = 0.0
+    already_watched: bool = False
+    in_watchlist: bool = False

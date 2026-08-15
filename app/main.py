@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import Base, engine
-from app.routers import activity, analytics, notifications, recommendations, search, settings, watched, watchlist
+from app.routers import activity, analytics, browse, notifications, recommendations, search, settings, watched, watchlist
 
 settings_obj = get_settings()
 
@@ -34,6 +34,7 @@ app.include_router(notifications.router)
 app.include_router(settings.router)
 app.include_router(search.router)
 app.include_router(activity.router)
+app.include_router(browse.router)
 
 
 @app.get("/api/health")

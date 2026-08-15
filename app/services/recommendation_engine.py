@@ -18,6 +18,8 @@ from app.models import AppSettings, IgnoredRecommendation, WatchedItem, Watchlis
 from app.services import tmdb
 
 COLD_START_THRESHOLD = 5
+DEFAULT_LIMIT = 50
+MAX_PAGES_PER_TYPE = 5  # TMDb returns ~20 results/page — plenty of headroom for 50 combined
 
 
 def _excluded_ids(db: Session) -> set[int]:
@@ -41,7 +43,7 @@ def _rank_score(rating: float, index: int) -> int:
     return max(1, min(99, round(rating * 10) - index))
 
 
-def generate(db: Session, limit: int = 24) -> list[dict]:
+def generate(db: Session, limit: int = DEFAULT_LIMIT) -> list[dict]:
     settings = _get_settings(db)
     exclude = _excluded_ids(db)
     watched = db.query(WatchedItem).all()
@@ -55,19 +57,31 @@ def generate(db: Session, limit: int = 24) -> list[dict]:
     results: list[dict] = []
 
     if len(watched) < COLD_START_THRESHOLD:
+        # Pull as many top-rated pages as needed (per type) so that after
+        # excluding watched/queued/ignored titles we still have enough left
+        # to fill the requested limit, rather than stopping at page 1.
+        per_type_target = limit  # worst case: all results end up in one type
         for media_type in media_types:
-            for i, item in enumerate(tmdb.top_rated(db, media_type)):
-                if item["tmdb_id"] in exclude:
-                    continue
-                if item["imdb_rating"] < settings.min_recommendation_rating:
-                    continue
-                results.append(
-                    {
-                        **item,
-                        "reason": "Top-rated on TMDb — a great place to start your profile",
-                        "match_score": _rank_score(item["imdb_rating"], i),
-                    }
-                )
+            collected = 0
+            for page in range(1, MAX_PAGES_PER_TYPE + 1):
+                page_items = tmdb.top_rated(db, media_type, page=page)
+                if not page_items:
+                    break
+                for item in page_items:
+                    if item["tmdb_id"] in exclude:
+                        continue
+                    if item["imdb_rating"] < settings.min_recommendation_rating:
+                        continue
+                    results.append(
+                        {
+                            **item,
+                            "reason": "Top-rated on TMDb — a great place to start your profile",
+                            "match_score": _rank_score(item["imdb_rating"], collected),
+                        }
+                    )
+                    collected += 1
+                if collected >= per_type_target:
+                    break
     else:
         genre_counter: Counter[str] = Counter()
         for item in watched:

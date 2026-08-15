@@ -139,34 +139,19 @@ def top_rated(db: Session, media_type: str, page: int = 1) -> list[dict]:
     return results
 
 
-def discover(
-    db: Session,
-    media_type: str,
-    genre_ids: list[int],
-    exclude_ids: set[int],
-    min_rating: float = 0.0,
-    limit: int = 12,
-) -> list[dict]:
+def popular(db: Session, media_type: str, page: int = 1) -> list[dict]:
+    """TMDb's `/popular` endpoint — mainstream, widely-watched titles.
+    Used for the Browse page, distinct from `top_rated` (which skews toward
+    critically acclaimed/niche titles) since the point here is surfacing
+    things a typical viewer has actually seen."""
     kind = "movie" if media_type == "movie" else "tv"
-    genres = genre_map(db, media_type)
-    params = {
-        "sort_by": "vote_average.desc",
-        "vote_count.gte": 300,
-        "vote_average.gte": max(min_rating, 6.0),
-    }
-    if genre_ids:
-        params["with_genres"] = ",".join(str(g) for g in genre_ids)
+    data = _get(db, f"/{kind}/popular", {"page": page})
 
-    data = _get(db, f"/discover/{kind}", params)
     results = []
     for item in data.get("results", []):
-        if item["id"] in exclude_ids:
-            continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
         year = int(date_str[:4]) if date_str[:4].isdigit() else 0
-        genre_names = [genres.get(gid, "") for gid in item.get("genre_ids", [])]
-        genre_names = [g for g in genre_names if g][:3]
         results.append(
             {
                 "tmdb_id": item["id"],
@@ -175,12 +160,61 @@ def discover(
                 "year": year,
                 "poster_path": _poster(item.get("poster_path")),
                 "imdb_rating": round(item.get("vote_average") or 0, 1),
-                "genres": genre_names,
             }
         )
+    return results
+
+
+def discover(
+    db: Session,
+    media_type: str,
+    genre_ids: list[int],
+    exclude_ids: set[int],
+    min_rating: float = 0.0,
+    limit: int = 12,
+    max_pages: int = 5,
+) -> list[dict]:
+    kind = "movie" if media_type == "movie" else "tv"
+    genres = genre_map(db, media_type)
+    base_params = {
+        "sort_by": "vote_average.desc",
+        "vote_count.gte": 300,
+        "vote_average.gte": max(min_rating, 6.0),
+    }
+    if genre_ids:
+        base_params["with_genres"] = ",".join(str(g) for g in genre_ids)
+
+    results = []
+    for page in range(1, max_pages + 1):
+        data = _get(db, f"/discover/{kind}", {**base_params, "page": page})
+        page_results = data.get("results", [])
+        if not page_results:
+            break
+
+        for item in page_results:
+            if item["id"] in exclude_ids:
+                continue
+            title = item.get("title") or item.get("name")
+            date_str = item.get("release_date") or item.get("first_air_date") or ""
+            year = int(date_str[:4]) if date_str[:4].isdigit() else 0
+            genre_names = [genres.get(gid, "") for gid in item.get("genre_ids", [])]
+            genre_names = [g for g in genre_names if g][:3]
+            results.append(
+                {
+                    "tmdb_id": item["id"],
+                    "title": title,
+                    "media_type": media_type,
+                    "year": year,
+                    "poster_path": _poster(item.get("poster_path")),
+                    "imdb_rating": round(item.get("vote_average") or 0, 1),
+                    "genres": genre_names,
+                }
+            )
+            if len(results) >= limit:
+                break
         if len(results) >= limit:
             break
-    return results
+    return results[:limit]
 
 
 def get_details(db: Session, media_type: str, tmdb_id: int) -> dict:
