@@ -32,7 +32,11 @@ def browse(
     watched_ids, watchlist_ids = _status_sets(db)
 
     if query:
-        raw = [r for r in tmdb.search_multi(db, query, limit=40) if r["media_type"] == media_type]
+        raw = [
+            r
+            for r in tmdb.search_multi(db, query, limit=40, exclude_documentaries_and_anime=True)
+            if r["media_type"] == media_type
+        ]
     else:
         raw = tmdb.popular(db, media_type, page=page)
 

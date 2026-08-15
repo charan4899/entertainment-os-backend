@@ -88,12 +88,37 @@ def _normalize_media_type(tmdb_media_type: str) -> str:
     return "series" if tmdb_media_type == "tv" else "movie"
 
 
-def search_multi(db: Session, query: str, limit: int = 10) -> list[dict]:
+# TMDb's genre taxonomy is stable and shared across movie/tv: 99 =
+# Documentary, 16 = Animation. TMDb has no dedicated "Anime" genre, so the
+# standard heuristic (used by most TMDb-based tools) is Animation + a
+# Japanese original_language.
+_DOCUMENTARY_GENRE_ID = 99
+_ANIMATION_GENRE_ID = 16
+
+
+def _is_documentary_or_anime(genre_ids: list[int], original_language: str | None) -> bool:
+    if _DOCUMENTARY_GENRE_ID in genre_ids:
+        return True
+    if _ANIMATION_GENRE_ID in genre_ids and original_language == "ja":
+        return True
+    return False
+
+
+def search_multi(
+    db: Session,
+    query: str,
+    limit: int = 10,
+    exclude_documentaries_and_anime: bool = False,
+) -> list[dict]:
     data = _get(db, "/search/multi", {"query": query, "include_adult": "false"})
     results = []
     for item in data.get("results", []):
         media_type = item.get("media_type")
         if media_type not in ("movie", "tv"):
+            continue
+        if exclude_documentaries_and_anime and _is_documentary_or_anime(
+            item.get("genre_ids", []), item.get("original_language")
+        ):
             continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
@@ -120,10 +145,13 @@ def top_rated(db: Session, media_type: str, page: int = 1) -> list[dict]:
 
     results = []
     for item in data.get("results", []):
+        genre_ids = item.get("genre_ids", [])
+        if _is_documentary_or_anime(genre_ids, item.get("original_language")):
+            continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
         year = int(date_str[:4]) if date_str[:4].isdigit() else 0
-        genre_names = [genres.get(gid, "") for gid in item.get("genre_ids", [])]
+        genre_names = [genres.get(gid, "") for gid in genre_ids]
         genre_names = [g for g in genre_names if g][:3]
         results.append(
             {
@@ -149,6 +177,8 @@ def popular(db: Session, media_type: str, page: int = 1) -> list[dict]:
 
     results = []
     for item in data.get("results", []):
+        if _is_documentary_or_anime(item.get("genre_ids", []), item.get("original_language")):
+            continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
         year = int(date_str[:4]) if date_str[:4].isdigit() else 0
@@ -194,10 +224,13 @@ def discover(
         for item in page_results:
             if item["id"] in exclude_ids:
                 continue
+            item_genre_ids = item.get("genre_ids", [])
+            if _is_documentary_or_anime(item_genre_ids, item.get("original_language")):
+                continue
             title = item.get("title") or item.get("name")
             date_str = item.get("release_date") or item.get("first_air_date") or ""
             year = int(date_str[:4]) if date_str[:4].isdigit() else 0
-            genre_names = [genres.get(gid, "") for gid in item.get("genre_ids", [])]
+            genre_names = [genres.get(gid, "") for gid in item_genre_ids]
             genre_names = [g for g in genre_names if g][:3]
             results.append(
                 {
