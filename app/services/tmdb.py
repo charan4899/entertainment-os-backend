@@ -212,7 +212,12 @@ def discover(
         "vote_average.gte": max(min_rating, 6.0),
     }
     if genre_ids:
-        base_params["with_genres"] = ",".join(str(g) for g in genre_ids)
+        # Pipe-separated = OR in TMDb's query syntax ("any of these genres").
+        # Comma-separated would mean AND ("all of these genres at once"),
+        # which is far too restrictive for a "matches your top genres" or
+        # "matches any selected genre" filter — it was quietly starving
+        # recommendations down to a handful of results.
+        base_params["with_genres"] = "|".join(str(g) for g in genre_ids)
 
     results = []
     for page in range(1, max_pages + 1):
