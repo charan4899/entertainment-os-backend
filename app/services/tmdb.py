@@ -254,4 +254,13 @@ def get_details(db: Session, media_type: str, tmdb_id: int) -> dict:
         "status": data.get("status"),
         "next_episode_to_air": data.get("next_episode_to_air"),
         "last_air_date": data.get("last_air_date"),
+        # Per-season air dates — used to determine whether a season aired
+        # before or after the user's watched_date, rather than just
+        # comparing season counts (which breaks the moment someone marks a
+        # multi-season show watched, since watched-season-count and
+        # available-season-count are different things).
+        "seasons": [
+            {"season_number": s.get("season_number"), "air_date": s.get("air_date")}
+            for s in data.get("seasons", [])
+        ],
     }

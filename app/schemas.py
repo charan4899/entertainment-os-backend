@@ -190,3 +190,20 @@ class BrowseResultOut(BaseModel):
     imdb_rating: float = 0.0
     already_watched: bool = False
     in_watchlist: bool = False
+
+
+# ---------------------------------------------------------------------------
+# One-off maintenance: backfill seasons_watched for rows written before the
+# "mark watched" endpoints were fixed to record the real season count.
+# ---------------------------------------------------------------------------
+
+class BackfillSeasonsItem(BaseModel):
+    title: str
+    previous_seasons_watched: int | None
+    new_seasons_watched: int
+
+
+class BackfillSeasonsResult(BaseModel):
+    updated: list[BackfillSeasonsItem]
+    unchanged_count: int
+    skipped_count: int

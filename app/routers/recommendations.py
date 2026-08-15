@@ -64,7 +64,7 @@ def recommendation_to_watched(
         watched_date=datetime.now(timezone.utc).date(),
         favorite=False,
         runtime_minutes=details["runtime_minutes"],
-        seasons_watched=1 if media_type == "series" else None,
+        seasons_watched=(details.get("number_of_seasons") or 1) if media_type == "series" else None,
         poster_path=details["poster_path"],
         director=details["director"],
         cast=details["cast"],

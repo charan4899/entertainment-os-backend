@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import WatchedItem, WatchlistItem
 from app.schemas import WatchedOut, WatchlistCreate, WatchlistOut
-from app.services import activity
+from app.services import activity, tmdb
+from app.services.tmdb import TmdbError
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -43,6 +44,21 @@ def mark_watched(item_id: str, db: Session = Depends(get_db)):
     if not item:
         raise HTTPException(404, "Watchlist item not found")
 
+    # A watchlist row only stores whatever was known when it was added
+    # (often just a season count of zero unknowns). Look up the current
+    # season count from TMDb now, at the moment of marking watched, so
+    # analytics and notifications have an accurate "seasons watched" figure
+    # instead of defaulting to 1.
+    seasons_watched = None
+    if item.media_type == "series":
+        seasons_watched = 1
+        if item.tmdb_id:
+            try:
+                details = tmdb.get_details(db, "series", item.tmdb_id)
+                seasons_watched = details.get("number_of_seasons") or 1
+            except TmdbError:
+                pass
+
     watched = WatchedItem(
         tmdb_id=item.tmdb_id,
         title=item.title,
@@ -53,7 +69,7 @@ def mark_watched(item_id: str, db: Session = Depends(get_db)):
         watched_date=datetime.now(timezone.utc).date(),
         favorite=False,
         runtime_minutes=item.runtime_minutes,
-        seasons_watched=1 if item.media_type == "series" else None,
+        seasons_watched=seasons_watched,
         poster_path=item.poster_path,
         director=item.director,
         cast=item.cast,

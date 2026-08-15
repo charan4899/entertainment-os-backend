@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import WatchedItem, WatchlistItem
-from app.schemas import BrowseResultOut, MediaType, WatchedOut
+from app.schemas import BrowseResultOut, MediaType, WatchedOut, WatchlistOut
 from app.services import activity, tmdb
 
 router = APIRouter(prefix="/api/browse", tags=["browse"])
@@ -25,14 +25,18 @@ def browse(
     db: Session = Depends(get_db),
 ):
     """No query -> paginated popular titles. With a query -> TMDb search,
-    filtered to the requested media type. Either way, every result is
-    flagged with whether it's already watched or queued."""
+    filtered to the requested media type. Titles already marked watched are
+    dropped entirely (nothing left to do with them here); titles already on
+    the watchlist are kept, just flagged, since re-browsing them is still
+    useful."""
     watched_ids, watchlist_ids = _status_sets(db)
 
     if query:
         raw = [r for r in tmdb.search_multi(db, query, limit=40) if r["media_type"] == media_type]
     else:
         raw = tmdb.popular(db, media_type, page=page)
+
+    raw = [item for item in raw if item["tmdb_id"] not in watched_ids]
 
     return [
         BrowseResultOut(
@@ -42,7 +46,7 @@ def browse(
             year=item.get("year"),
             poster_path=item.get("poster_path"),
             imdb_rating=item.get("imdb_rating", 0.0),
-            already_watched=item["tmdb_id"] in watched_ids,
+            already_watched=False,
             in_watchlist=item["tmdb_id"] in watchlist_ids,
         )
         for item in raw
@@ -64,7 +68,7 @@ def mark_watched(tmdb_id: int, media_type: MediaType = Query(...), db: Session =
         watched_date=datetime.now(timezone.utc).date(),
         favorite=False,
         runtime_minutes=details["runtime_minutes"],
-        seasons_watched=1 if media_type == "series" else None,
+        seasons_watched=(details.get("number_of_seasons") or 1) if media_type == "series" else None,
         poster_path=details["poster_path"],
         director=details["director"],
         cast=details["cast"],
@@ -74,4 +78,29 @@ def mark_watched(tmdb_id: int, media_type: MediaType = Query(...), db: Session =
     db.refresh(item)
 
     activity.log(db, "Marked as watched", item.title, "watched")
+    return item
+
+
+@router.post("/{tmdb_id}/watchlist", response_model=WatchlistOut, status_code=201)
+def add_to_watchlist(tmdb_id: int, media_type: MediaType = Query(...), db: Session = Depends(get_db)):
+    """Queue a title from the Browse grid, without marking it watched."""
+    details = tmdb.get_details(db, media_type, tmdb_id)
+    item = WatchlistItem(
+        tmdb_id=tmdb_id,
+        title=details["title"],
+        media_type=media_type,
+        imdb_rating=details["imdb_rating"],
+        genres=details["genres"],
+        year=details["year"],
+        runtime_minutes=details["runtime_minutes"],
+        poster_path=details["poster_path"],
+        priority="medium",
+        director=details["director"],
+        cast=details["cast"],
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    activity.log(db, "Added to watchlist", item.title, "watchlist")
     return item
