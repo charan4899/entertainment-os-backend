@@ -89,26 +89,25 @@ def _normalize_media_type(tmdb_media_type: str) -> str:
 
 
 # TMDb's genre taxonomy is stable and shared across movie/tv: 99 =
-# Documentary, 16 = Animation. TMDb has no dedicated "Anime" genre, so the
-# standard heuristic (used by most TMDb-based tools) is Animation + a
-# Japanese original_language.
+# Documentary, 16 = Animation. Both are excluded from Recommendations and
+# Browse entirely — Animation is excluded unconditionally now (not just
+# anime), since Western animation was still slipping through: TMDb tags a
+# lot of family/kids content with both "Animation" and whatever content
+# genre it also has (e.g. Action & Adventure), so an Animation title could
+# still surface under an unrelated genre filter.
 _DOCUMENTARY_GENRE_ID = 99
 _ANIMATION_GENRE_ID = 16
 
 
-def _is_documentary_or_anime(genre_ids: list[int], original_language: str | None) -> bool:
-    if _DOCUMENTARY_GENRE_ID in genre_ids:
-        return True
-    if _ANIMATION_GENRE_ID in genre_ids and original_language == "ja":
-        return True
-    return False
+def _is_documentary_or_animation(genre_ids: list[int]) -> bool:
+    return _DOCUMENTARY_GENRE_ID in genre_ids or _ANIMATION_GENRE_ID in genre_ids
 
 
 def search_multi(
     db: Session,
     query: str,
     limit: int = 10,
-    exclude_documentaries_and_anime: bool = False,
+    exclude_documentaries_and_animation: bool = False,
 ) -> list[dict]:
     data = _get(db, "/search/multi", {"query": query, "include_adult": "false"})
     results = []
@@ -116,8 +115,8 @@ def search_multi(
         media_type = item.get("media_type")
         if media_type not in ("movie", "tv"):
             continue
-        if exclude_documentaries_and_anime and _is_documentary_or_anime(
-            item.get("genre_ids", []), item.get("original_language")
+        if exclude_documentaries_and_animation and _is_documentary_or_animation(
+            item.get("genre_ids", [])
         ):
             continue
         title = item.get("title") or item.get("name")
@@ -146,7 +145,7 @@ def top_rated(db: Session, media_type: str, page: int = 1) -> list[dict]:
     results = []
     for item in data.get("results", []):
         genre_ids = item.get("genre_ids", [])
-        if _is_documentary_or_anime(genre_ids, item.get("original_language")):
+        if _is_documentary_or_animation(genre_ids):
             continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
@@ -177,7 +176,7 @@ def popular(db: Session, media_type: str, page: int = 1) -> list[dict]:
 
     results = []
     for item in data.get("results", []):
-        if _is_documentary_or_anime(item.get("genre_ids", []), item.get("original_language")):
+        if _is_documentary_or_animation(item.get("genre_ids", [])):
             continue
         title = item.get("title") or item.get("name")
         date_str = item.get("release_date") or item.get("first_air_date") or ""
@@ -237,7 +236,7 @@ def discover(
             if item["id"] in exclude_ids:
                 continue
             item_genre_ids = item.get("genre_ids", [])
-            if _is_documentary_or_anime(item_genre_ids, item.get("original_language")):
+            if _is_documentary_or_animation(item_genre_ids):
                 continue
             title = item.get("title") or item.get("name")
             date_str = item.get("release_date") or item.get("first_air_date") or ""

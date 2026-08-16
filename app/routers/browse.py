@@ -34,7 +34,7 @@ def browse(
     if query:
         raw = [
             r
-            for r in tmdb.search_multi(db, query, limit=40, exclude_documentaries_and_anime=True)
+            for r in tmdb.search_multi(db, query, limit=40, exclude_documentaries_and_animation=True)
             if r["media_type"] == media_type
         ]
     else:

@@ -95,13 +95,15 @@ def _enabled_media_types(settings: AppSettings) -> list[str]:
 
 def available_genres(db: Session) -> list[str]:
     """Genre names the filter UI can offer — union of whichever media
-    types are enabled, minus Documentary (always excluded from
-    recommendations regardless of filter)."""
+    types are enabled, minus Documentary and Animation (both always
+    excluded from recommendations regardless of filter, so offering them
+    as a choice would just be a guaranteed-empty option)."""
     settings = _get_settings(db)
     names: set[str] = set()
     for media_type in _enabled_media_types(settings) or ["movie", "series"]:
         names.update(tmdb.genre_map(db, media_type).values())
     names.discard("Documentary")
+    names.discard("Animation")
     return sorted(names)
 
 
