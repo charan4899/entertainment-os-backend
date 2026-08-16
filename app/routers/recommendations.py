@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import IgnoredRecommendation, WatchedItem, WatchlistItem
-from app.schemas import MediaType, RecommendationOut, WatchedOut, WatchlistOut
+from app.schemas import MediaType, OriginCountryOut, RecommendationOut, WatchedOut, WatchlistOut
 from app.services import activity, tmdb
-from app.services.recommendation_engine import available_genres, generate
+from app.services.recommendation_engine import ORIGIN_COUNTRY_OPTIONS, available_genres, generate
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 
@@ -17,10 +17,18 @@ def list_recommendations(
     genres: str | None = Query(None, description="Comma-separated genre names to filter by"),
     min_year: int | None = Query(None, ge=1900, le=2100, description="Show titles from this year onward"),
     media_type: MediaType | None = Query(None, description="Restrict to movies or series only"),
+    origin: str | None = Query(None, description="Comma-separated ISO country codes, e.g. US,GB"),
     db: Session = Depends(get_db),
 ):
     genre_names = [g.strip() for g in genres.split(",") if g.strip()] if genres else None
-    return generate(db, genre_names=genre_names, min_year=min_year, media_type_filter=media_type)
+    origin_countries = [c.strip().upper() for c in origin.split(",") if c.strip()] if origin else None
+    return generate(
+        db,
+        genre_names=genre_names,
+        min_year=min_year,
+        media_type_filter=media_type,
+        origin_countries=origin_countries,
+    )
 
 
 @router.get("/genres", response_model=list[str])
@@ -29,6 +37,14 @@ def list_recommendation_genres(db: Session = Depends(get_db)):
     populate the filter UI, so it only ever offers genres that could
     actually return results."""
     return available_genres(db)
+
+
+@router.get("/origins", response_model=list[OriginCountryOut])
+def list_recommendation_origins():
+    """Curated list of production countries available for the origin
+    filter — not the full ISO 3166-1 list (that'd be unusable as a chip
+    picker), just the major production countries."""
+    return ORIGIN_COUNTRY_OPTIONS
 
 
 @router.post("/{tmdb_id}/ignore", status_code=204)

@@ -207,3 +207,12 @@ class BackfillSeasonsResult(BaseModel):
     updated: list[BackfillSeasonsItem]
     unchanged_count: int
     skipped_count: int
+
+
+# ---------------------------------------------------------------------------
+# Recommendation origin-country filter
+# ---------------------------------------------------------------------------
+
+class OriginCountryOut(BaseModel):
+    code: str
+    label: str

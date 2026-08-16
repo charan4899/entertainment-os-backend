@@ -201,6 +201,7 @@ def discover(
     exclude_ids: set[int],
     min_rating: float = 0.0,
     min_year: int | None = None,
+    origin_country: str | None = None,
     limit: int = 12,
     max_pages: int = 5,
 ) -> list[dict]:
@@ -224,6 +225,14 @@ def discover(
         # /discover path regardless of watch history.
         date_field = "primary_release_date.gte" if kind == "movie" else "first_air_date.gte"
         base_params[date_field] = f"{min_year}-01-01"
+    if origin_country:
+        # with_origin_country is an undocumented-but-confirmed-stable TMDb
+        # discover filter (single ISO 3166-1 country code per call). Its
+        # multi-value OR syntax isn't documented, so multi-country
+        # selection is handled by the caller issuing one call per country
+        # and merging results, rather than trusting an unverified pipe
+        # join here.
+        base_params["with_origin_country"] = origin_country
 
     results = []
     for page in range(1, max_pages + 1):

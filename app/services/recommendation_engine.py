@@ -3,10 +3,11 @@ Recommendation logic — deliberately simple, no AI/ML APIs.
 
 Three modes, in priority order:
 
-1. Explicit filter active (genre and/or year picked on the page): always
-   goes through /discover with those constraints, regardless of watch
-   history. TMDb's top_rated endpoint has no date filter at all, so a year
-   filter forces this path even with zero genres selected.
+1. Explicit filter active (genre, year, and/or origin country picked on the
+   page): always goes through /discover with those constraints, regardless
+   of watch history. TMDb's top_rated endpoint has no date or country
+   filter at all, so a year or origin filter forces this path even with
+   zero genres selected.
 
 2. No filter, cold start (fewer than COLD_START_THRESHOLD watched titles):
    TMDb's top-rated movies and series.
@@ -48,6 +49,28 @@ _GENRE_ALIASES: dict[str, list[str]] = {
     "War": ["War & Politics"],
     "War & Politics": ["War"],
 }
+
+# A curated set rather than the full ISO 3166-1 list (195+ countries would
+# be unusable as a chip picker) — the major English-language and
+# high-output production countries, covering what people typically mean by
+# "American", "British", "Korean", etc.
+ORIGIN_COUNTRY_OPTIONS: list[dict[str, str]] = [
+    {"code": "US", "label": "United States"},
+    {"code": "GB", "label": "United Kingdom"},
+    {"code": "CA", "label": "Canada"},
+    {"code": "AU", "label": "Australia"},
+    {"code": "KR", "label": "South Korea"},
+    {"code": "JP", "label": "Japan"},
+    {"code": "IN", "label": "India"},
+    {"code": "FR", "label": "France"},
+    {"code": "DE", "label": "Germany"},
+    {"code": "ES", "label": "Spain"},
+    {"code": "IT", "label": "Italy"},
+    {"code": "CN", "label": "China"},
+    {"code": "MX", "label": "Mexico"},
+    {"code": "BR", "label": "Brazil"},
+]
+_ORIGIN_LABELS = {c["code"]: c["label"] for c in ORIGIN_COUNTRY_OPTIONS}
 
 
 def _resolve_genre_ids(genre_names: list[str], reverse_map: dict[str, int]) -> list[int]:
@@ -107,12 +130,51 @@ def available_genres(db: Session) -> list[str]:
     return sorted(names)
 
 
+def _discover_for_type(
+    db: Session,
+    media_type: str,
+    genre_ids: list[int],
+    exclude: set[int],
+    min_rating: float,
+    min_year: int | None,
+    origin_countries: list[str] | None,
+    limit: int,
+) -> list[dict]:
+    """Runs /discover for one media type, honoring an optional multi-country
+    filter. Multiple countries are queried one at a time and merged rather
+    than trusting an undocumented pipe-OR on with_origin_country — see the
+    comment in tmdb.discover(). Results are deduplicated across the
+    per-country calls via a growing local exclude set."""
+    if not origin_countries:
+        return tmdb.discover(
+            db, media_type, genre_ids, exclude,
+            min_rating=min_rating, min_year=min_year,
+            limit=limit, max_pages=EXPLICIT_FILTER_MAX_PAGES,
+        )
+
+    local_exclude = set(exclude)
+    combined: list[dict] = []
+    for country in origin_countries:
+        if len(combined) >= limit:
+            break
+        batch = tmdb.discover(
+            db, media_type, genre_ids, local_exclude,
+            min_rating=min_rating, min_year=min_year, origin_country=country,
+            limit=limit - len(combined), max_pages=EXPLICIT_FILTER_MAX_PAGES,
+        )
+        for item in batch:
+            local_exclude.add(item["tmdb_id"])
+        combined.extend(batch)
+    return combined
+
+
 def generate(
     db: Session,
     limit: int = DEFAULT_LIMIT,
     genre_names: list[str] | None = None,
     min_year: int | None = None,
     media_type_filter: str | None = None,
+    origin_countries: list[str] | None = None,
 ) -> list[dict]:
     settings = _get_settings(db)
     exclude = _excluded_ids(db)
@@ -125,7 +187,7 @@ def generate(
 
     results: list[dict] = []
 
-    if genre_names or min_year:
+    if genre_names or min_year or origin_countries:
         for media_type in media_types:
             reverse_map = {name: gid for gid, name in tmdb.genre_map(db, media_type).items()}
             genre_ids = _resolve_genre_ids(genre_names, reverse_map) if genre_names else []
@@ -135,20 +197,22 @@ def generate(
                 # move on rather than sending an unfiltered /discover call.
                 continue
 
-            discovered = tmdb.discover(
-                db,
-                media_type,
-                genre_ids,
-                exclude,
-                min_rating=settings.min_recommendation_rating,
-                min_year=min_year,
-                limit=limit,
-                max_pages=EXPLICIT_FILTER_MAX_PAGES,
+            discovered = _discover_for_type(
+                db, media_type, genre_ids, exclude,
+                settings.min_recommendation_rating, min_year, origin_countries, limit,
             )
             for i, item in enumerate(discovered):
                 overlap = [g for g in item.get("genres", []) if g in (genre_names or [])]
                 if overlap:
                     reason = f"Matches your selected genre: {overlap[0]}"
+                elif min_year and origin_countries:
+                    country_label = _ORIGIN_LABELS.get(origin_countries[0], origin_countries[0])
+                    suffix = f" +{len(origin_countries) - 1} more" if len(origin_countries) > 1 else ""
+                    reason = f"From {country_label}{suffix}, released {min_year} or later"
+                elif origin_countries:
+                    country_label = _ORIGIN_LABELS.get(origin_countries[0], origin_countries[0])
+                    suffix = f" +{len(origin_countries) - 1} more" if len(origin_countries) > 1 else ""
+                    reason = f"From {country_label}{suffix}"
                 elif min_year:
                     reason = f"Released {min_year} or later"
                 else:
