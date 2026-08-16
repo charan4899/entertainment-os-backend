@@ -1,18 +1,23 @@
 """
 Recommendation logic — deliberately simple, no AI/ML APIs.
 
-Cold start (fewer than COLD_START_THRESHOLD watched titles): surface TMDb's
-top-rated movies and series, same as the Phase 1 seed data.
+Three modes, in priority order:
 
-Once there's enough watch history: build a genre frequency profile from
-what's been watched, then ask TMDb's /discover endpoint for highly-rated
-titles in those genres, excluding anything already watched, queued, or
-dismissed.
+1. Explicit filter active (genre and/or year picked on the page): always
+   goes through /discover with those constraints, regardless of watch
+   history. TMDb's top_rated endpoint has no date filter at all, so a year
+   filter forces this path even with zero genres selected.
 
-If the person explicitly picks genres on the Recommendations page, that
-takes priority over both of the above — it's a deliberate, explicit ask,
-so it always goes through /discover with a higher page budget to actually
-try to fill the requested count.
+2. No filter, cold start (fewer than COLD_START_THRESHOLD watched titles):
+   TMDb's top-rated movies and series.
+
+3. No filter, enough watch history: genre-affinity /discover using your
+   top 3 watched genres.
+
+A page-level "show me only movies" / "only series" choice is orthogonal to
+all three modes above — it just narrows which media type(s) get queried,
+and each mode independently tries to fill the full requested count for
+whichever type(s) are active, rather than splitting one shared pool.
 """
 
 from collections import Counter
@@ -25,7 +30,37 @@ from app.services import tmdb
 COLD_START_THRESHOLD = 5
 DEFAULT_LIMIT = 50
 MAX_PAGES_PER_TYPE = 8  # TMDb returns ~20 results/page
-GENRE_FILTER_MAX_PAGES = 20  # explicit, deliberate ask — worth the extra calls
+EXPLICIT_FILTER_MAX_PAGES = 20  # deliberate, occasional action — worth the extra calls
+
+# TMDb's movie and TV genre lists use different names for what's really the
+# same concept (e.g. movies have "Action", TV has "Action & Adventure").
+# Selecting "Action" and then filtering to Series would otherwise silently
+# resolve to zero genre ids for the TV lookup and return nothing. This maps
+# a genre name to the names it should also be tried as in the *other*
+# namespace.
+_GENRE_ALIASES: dict[str, list[str]] = {
+    "Action": ["Action & Adventure"],
+    "Adventure": ["Action & Adventure"],
+    "Action & Adventure": ["Action", "Adventure"],
+    "Fantasy": ["Sci-Fi & Fantasy"],
+    "Science Fiction": ["Sci-Fi & Fantasy"],
+    "Sci-Fi & Fantasy": ["Fantasy", "Science Fiction"],
+    "War": ["War & Politics"],
+    "War & Politics": ["War"],
+}
+
+
+def _resolve_genre_ids(genre_names: list[str], reverse_map: dict[str, int]) -> list[int]:
+    ids: list[int] = []
+    for name in genre_names:
+        if name in reverse_map:
+            ids.append(reverse_map[name])
+            continue
+        for alias in _GENRE_ALIASES.get(name, []):
+            if alias in reverse_map:
+                ids.append(reverse_map[alias])
+                break
+    return ids
 
 
 def _excluded_ids(db: Session) -> set[int]:
@@ -70,39 +105,52 @@ def available_genres(db: Session) -> list[str]:
     return sorted(names)
 
 
-def generate(db: Session, limit: int = DEFAULT_LIMIT, genre_names: list[str] | None = None) -> list[dict]:
+def generate(
+    db: Session,
+    limit: int = DEFAULT_LIMIT,
+    genre_names: list[str] | None = None,
+    min_year: int | None = None,
+    media_type_filter: str | None = None,
+) -> list[dict]:
     settings = _get_settings(db)
     exclude = _excluded_ids(db)
     watched = db.query(WatchedItem).all()
-    media_types = _enabled_media_types(settings)
+
+    # An explicit "only movies" / "only series" choice on the page overrides
+    # the general Settings toggle for this request — it's a viewing choice,
+    # not a change to your standing preference.
+    media_types = [media_type_filter] if media_type_filter else _enabled_media_types(settings)
 
     results: list[dict] = []
 
-    if genre_names:
-        # Explicit filter — always goes through /discover, regardless of
-        # watch history, with a much higher page budget since this is a
-        # deliberate one-off request rather than a background refill.
+    if genre_names or min_year:
         for media_type in media_types:
             reverse_map = {name: gid for gid, name in tmdb.genre_map(db, media_type).items()}
-            genre_ids = [reverse_map[g] for g in genre_names if g in reverse_map]
-            if not genre_ids:
+            genre_ids = _resolve_genre_ids(genre_names, reverse_map) if genre_names else []
+            if genre_names and not genre_ids:
+                # None of the selected genres exist in this media type's
+                # namespace (even after aliasing) — nothing to fetch here,
+                # move on rather than sending an unfiltered /discover call.
                 continue
+
             discovered = tmdb.discover(
                 db,
                 media_type,
                 genre_ids,
                 exclude,
                 min_rating=settings.min_recommendation_rating,
+                min_year=min_year,
                 limit=limit,
-                max_pages=GENRE_FILTER_MAX_PAGES,
+                max_pages=EXPLICIT_FILTER_MAX_PAGES,
             )
             for i, item in enumerate(discovered):
-                overlap = [g for g in item.get("genres", []) if g in genre_names]
-                reason = (
-                    f"Matches your selected genre: {overlap[0]}"
-                    if overlap
-                    else f"Highly rated — tagged under {', '.join(item.get('genres', [])[:2]) or 'your selection'}"
-                )
+                overlap = [g for g in item.get("genres", []) if g in (genre_names or [])]
+                if overlap:
+                    reason = f"Matches your selected genre: {overlap[0]}"
+                elif min_year:
+                    reason = f"Released {min_year} or later"
+                else:
+                    reason = "Highly rated on TMDb"
                 results.append(
                     {**item, "reason": reason, "match_score": _rank_score(item["imdb_rating"], i)}
                 )
@@ -141,7 +189,7 @@ def generate(db: Session, limit: int = DEFAULT_LIMIT, genre_names: list[str] | N
 
         for media_type in media_types:
             reverse_map = {name: gid for gid, name in tmdb.genre_map(db, media_type).items()}
-            genre_ids = [reverse_map[g] for g in top_genres if g in reverse_map]
+            genre_ids = _resolve_genre_ids(top_genres, reverse_map)
             discovered = tmdb.discover(
                 db,
                 media_type,

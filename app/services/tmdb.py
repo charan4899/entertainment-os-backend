@@ -201,6 +201,7 @@ def discover(
     genre_ids: list[int],
     exclude_ids: set[int],
     min_rating: float = 0.0,
+    min_year: int | None = None,
     limit: int = 12,
     max_pages: int = 5,
 ) -> list[dict]:
@@ -218,6 +219,12 @@ def discover(
         # "matches any selected genre" filter — it was quietly starving
         # recommendations down to a handful of results.
         base_params["with_genres"] = "|".join(str(g) for g in genre_ids)
+    if min_year:
+        # "This year through present" — TMDb's top_rated endpoint has no
+        # date filter at all, which is why a year filter forces the
+        # /discover path regardless of watch history.
+        date_field = "primary_release_date.gte" if kind == "movie" else "first_air_date.gte"
+        base_params[date_field] = f"{min_year}-01-01"
 
     results = []
     for page in range(1, max_pages + 1):

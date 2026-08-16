@@ -15,10 +15,12 @@ router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 @router.get("", response_model=list[RecommendationOut])
 def list_recommendations(
     genres: str | None = Query(None, description="Comma-separated genre names to filter by"),
+    min_year: int | None = Query(None, ge=1900, le=2100, description="Show titles from this year onward"),
+    media_type: MediaType | None = Query(None, description="Restrict to movies or series only"),
     db: Session = Depends(get_db),
 ):
     genre_names = [g.strip() for g in genres.split(",") if g.strip()] if genres else None
-    return generate(db, genre_names=genre_names)
+    return generate(db, genre_names=genre_names, min_year=min_year, media_type_filter=media_type)
 
 
 @router.get("/genres", response_model=list[str])
